@@ -567,6 +567,12 @@ def Complex_Wrapper (seed, function, octaves, fBm_bias_func, lacunarity=1.5, per
 
     plt.show()
 
+                                    #######################################################################################################
+                                    #                                                                                                     #
+                                    #                                            USER INTERFACE                                           #
+                                    #                                                                                                     #
+                                    #######################################################################################################
+
 
 if __name__ == "__main__":
 
@@ -605,3 +611,4 @@ if simple == True:
 else:
     Complex_Wrapper(seed, bias_function, octaves, fBm_bias_func, lacunarity, persistence, warp_func_x, warp_func_y, warp_noise_amplitude, warp_noise_frequency, 
                     warp_noise_seed, warp_noise_octaves, rotation_radians, noise_function_range, light_vector)
+
