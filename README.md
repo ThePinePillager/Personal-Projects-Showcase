@@ -8,7 +8,7 @@ Known bugs:
   - There is a suspected bug in the differentiation logic when noise warping is enabled, but it's quite hard to verify. I've combed over the logic several times, and nothing looks wrong on paper, but the output is more chaotic than I suspect is should be. I'll create an approximate differentiation function for comparison.
   - The lighting engine is rather hard to work with because of MatPlotLib limitations. When the light vector is vertical, then there is no difference in lighting across the whole map, so the map appears dark.
 
-Images and Settings:
+Images:
 
-  <img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/b47a6568-6016-45b0-96ac-e6254e9cfb14" />
+  <img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/b47a6568-6016-45b0-96ac-e6254e9cfb14" /> Settings:
 
