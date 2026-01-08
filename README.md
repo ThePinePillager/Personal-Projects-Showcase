@@ -10,7 +10,8 @@ Known bugs:
 
 Images:
 
-  <img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/b47a6568-6016-45b0-96ac-e6254e9cfb14" /> 
+  <img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/b47a6568-6016-45b0-96ac-e6254e9cfb14" /> <img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/8599ffb6-a327-4927-9c32-41f3ac35918c" />
+
 
 Settings: 
     octaves = 12, 
