@@ -12,13 +12,13 @@ Images:
 
   <img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/b47a6568-6016-45b0-96ac-e6254e9cfb14" /> 
   Settings: 
-    octaves = 12
-    bias_function = sp.sqrt(x**2 + 0.000001) * -1
-    fBm_bias_func = sp.sqrt(x**2 + 0.00001)
-    lacunarity = 1.5
-    persistence = 0.75
-    warp_func_x = (sp.ln(y ** 2 + 0.000001))
-    warp_func_y = (sp.ln(x ** 2 + 0.000001))
-    noise_function_range = 1000
-    light_vector = [1, 1, 1]
+    - octaves = 12
+    - bias_function = sp.sqrt(x**2 + 0.000001) * -1
+    - fBm_bias_func = sp.sqrt(x**2 + 0.00001)
+    - lacunarity = 1.5
+    - persistence = 0.75
+    - warp_func_x = (sp.ln(y ** 2 + 0.000001))
+    - warp_func_y = (sp.ln(x ** 2 + 0.000001))
+    - noise_function_range = 1000
+    - light_vector = [1, 1, 1]
 
