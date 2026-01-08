@@ -11,7 +11,8 @@ Known bugs:
 Images:
 
   <img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/b47a6568-6016-45b0-96ac-e6254e9cfb14" /> 
-  Settings: 
+
+Settings: 
     - octaves = 12
     - bias_function = sp.sqrt(x**2 + 0.000001) * -1
     - fBm_bias_func = sp.sqrt(x**2 + 0.00001)
