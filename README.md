@@ -10,4 +10,5 @@ Known bugs:
 
 Images and Settings:
 
-  ![alt text](Ln_graph-1.png)
+  <img width="738" height="744" alt="image" src="https://github.com/user-attachments/assets/b47a6568-6016-45b0-96ac-e6254e9cfb14" />
+
