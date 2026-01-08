@@ -14,6 +14,7 @@ Images:
 
 
 Settings: 
+
     octaves = 12, 
     bias_function = sp.sqrt(x**2 + 0.000001) * -1, 
     fBm_bias_func = sp.sqrt(x**2 + 0.00001), 
