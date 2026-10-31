@@ -72,10 +72,10 @@ class Simplex_Noise:
 
         self.c_x = cp.linspace(start_x, stop_x, res)
         self.c_y = cp.linspace(start_y, stop_y, res)
-        X_init, Y_init = cp.meshgrid(self.c_x, self.c_y)
+        self.X_init, self.Y_init = cp.meshgrid(self.c_x, self.c_y)
 
-        self.X = X_init * self.frequency
-        self.Y = Y_init * self.frequency
+        self.X = self.X_init * self.frequency
+        self.Y = self.Y_init * self.frequency
         X_rot = self.X
         Y_rot = self.Y
         self.X = X_rot * cp.cos(rotation_radians) - Y_rot * cp.sin(rotation_radians)
@@ -105,7 +105,7 @@ class Simplex_Noise:
         self.Y0 = self.Y - (self.j - (self.i + self.j) * self.G2)
 
         self.i1 = cp.where(self.X0 > self.Y0, 1, 0)                         # Conditional triangle coordinates (splitting the skew parallelogram into 2 triangles)
-        self.j1 = 1 - self.i1
+        self.j1 = cp.where(self.X0 > self.Y0, 0, 1)
 
         self.X1 = self.X0 - self.i1 + self.G2                               # Second, Conditional triangle coordinates
         self.Y1 = self.Y0 - self.j1 + self.G2
@@ -149,16 +149,21 @@ class Simplex_Noise:
         dy = gradientMap[:,:,1]
         return cp.sqrt(cp.square(dx) + cp.square(dy))
 
+    def find_magnitudes(self, map):
+        dx = map[:,:,0]
+        dy = map[:,:,1]
+        return cp.sqrt(cp.square(dx) + cp.square(dy))
+
     
-    def __add__(self, other, gradient_add_toggle=False):                    # Overwriting the addition operator to make octave logic easier
+    def __add__(self, other):                    # Overwriting the addition operator to make octave logic easier
         self.noisemap = self.get_NoiseMap()
         other.noisemap = other.get_NoiseMap()
         self.noisemap = self.noisemap + other.noisemap
-        if gradient_add_toggle:
-            self_gradientmap = self.get_GradientMap()
-            other_gradientmap = other.get_GradientMap()
-            self.gradientmap = self.gradientmap + other.gradientmap
-            self.normalmap = None
+        self_gradientmap = self.get_GradientMap()
+        other_gradientmap = other.get_GradientMap()
+        dx = self_gradientmap[:,:,0] + other_gradientmap[:,:,0]
+        dy = self_gradientmap[:,:,1] + other_gradientmap[:,:,1]
+        self.gradientmap = cp.stack([dx, dy], axis = -1)
         return self
 
     def generate_permutation(self, seed):
@@ -205,13 +210,9 @@ class Simplex_Noise:
         vec1 = cp.stack([self.X1, self.Y1], axis=-1)
         vec2 = cp.stack([self.X2, self.Y2], axis=-1)
 
-        g1 = self.grad_map(self.i, self.j)
-        g2 = self.grad_map(self.i + self.i1, self.j + self.j1)
-        g3 = self.grad_map(self.i + 1, self.j + 1)
-
-        contribution1 = cp.power(distance1, 4) * cp.sum(g1 * vec0, axis=-1)
-        contribution2 = cp.power(distance2, 4) * cp.sum(g2 * vec1, axis=-1)
-        contribution3 = cp.power(distance3, 4) * cp.sum(g3 * vec2, axis=-1)
+        contribution1 = cp.power(distance1, 4) * cp.sum(self.grad_map(self.i, self.j) * vec0, axis=-1)
+        contribution2 = cp.power(distance2, 4) * cp.sum(self.grad_map(self.i + self.i1, self.j + self.j1) * vec1, axis=-1)
+        contribution3 = cp.power(distance3, 4) * cp.sum(self.grad_map(self.i + 1, self.j + 1) * vec2, axis=-1)
 
         simplex_noise_unfiltered = self.amplitude * (contribution1 + contribution2 + contribution3)
         self.unbiased_noisemap = simplex_noise_unfiltered
@@ -223,37 +224,67 @@ class Simplex_Noise:
         g2 = self.grad_map(self.i + self.i1, self.j + self.j1)
         g3 = self.grad_map(self.i + 1, self.j + 1)
 
-        distance1 = cp.maximum(0, 0.5 - cp.square(self.X0) - cp.square(self.Y0))
-        distance2 = cp.maximum(0, 0.5 - cp.square(self.X1) - cp.square(self.Y1))
-        distance3 = cp.maximum(0, 0.5 - cp.square(self.X2) - cp.square(self.Y2))
+        distance1 = cp.maximum(0.5 - self.X0**2 - self.Y0**2, 0)
+        distance2 = cp.maximum(0.5 - self.X1**2 - self.Y1**2, 0)
+        distance3 = cp.maximum(0.5 - self.X2**2 - self.Y2**2, 0)
 
         dot0 = g1[:,:,0] * self.X0 + g1[:,:,1] * self.Y0
         dot1 = g2[:,:,0] * self.X1 + g2[:,:,1] * self.Y1
         dot2 = g3[:,:,0] * self.X2 + g3[:,:,1] * self.Y2
 
         d_df = sp.diff(self.function, self.x)
+
+        dU_dx = sp.diff(self.warp_x, self.x)
+        dU_dy = sp.diff(self.warp_x, self.y)
+        dV_dx = sp.diff(self.warp_y, self.x)
+        dV_dy = sp.diff(self.warp_y, self.y)
+
         d_df_func = sp.lambdify(self.x, d_df, 'cupy')
 
-        dx0 = 4*(distance1**3)*(-2*self.X0)*dot0 + (distance1**4)*g1[:,:,0]
-        dy0 = 4*(distance1**3)*(-2*self.Y0)*dot0 + (distance1**4)*g1[:,:,1]
+        dU_dx_func = sp.lambdify((self.x, self.y), dU_dx, 'cupy')
+        dU_dy_func = sp.lambdify((self.x, self.y), dU_dy, 'cupy')
+        dV_dx_func = sp.lambdify((self.x, self.y), dV_dx, 'cupy')
+        dV_dy_func = sp.lambdify((self.x, self.y), dV_dy, 'cupy')
 
-        dx1 = 4*(distance2**3)*(-2*self.X1)*dot1 + (distance2**4)*g2[:,:,0]
-        dy1 = 4*(distance2**3)*(-2*self.Y1)*dot1 + (distance2**4)*g2[:,:,1]
+        d_df_vals = d_df_func(self.unbiased_noisemap)
+        self.bias_derivative_map = d_df_vals
 
-        dx2 = 4*(distance3**3)*(-2*self.X2)*dot2 + (distance3**4)*g3[:,:,0]
-        dy2 = 4*(distance3**3)*(-2*self.Y2)*dot2 + (distance3**4)*g3[:,:,1]
+        dU_dx_vals = dU_dx_func(self.X_orig, self.Y_orig)  # X, Y are cupy arrays
+        dU_dy_vals = dU_dy_func(self.X_orig, self.Y_orig)
+        dV_dx_vals = dV_dx_func(self.X_orig, self.Y_orig)
+        dV_dy_vals = dV_dy_func(self.X_orig, self.Y_orig)
 
-        dNx = dx0 + dx1 + dx2
-        dNy = dy0 + dy1 + dy2
+        mask1 = distance1 > 0
+        mask2 = distance2 > 0
+        mask3 = distance3 > 0
 
-        dfNx = dNx * d_df_func(self.unbiased_noisemap) * self.amplitude
-        dfNy = dNy * d_df_func(self.unbiased_noisemap) * self.amplitude
+        dx0 = (4*(distance1**3)*(-2*self.X0)*dot0 + (distance1**4)*g1[:,:,0]) * mask1
+        dy0 = (4*(distance1**3)*(-2*self.Y0)*dot0 + (distance1**4)*g1[:,:,1]) * mask1
+
+        dx1 = (4*(distance2**3)*(-2*self.X1)*dot1 + (distance2**4)*g2[:,:,0]) * mask2
+        dy1 = (4*(distance2**3)*(-2*self.Y1)*dot1 + (distance2**4)*g2[:,:,1]) * mask2
+
+        dx2 = (4*(distance3**3)*(-2*self.X2)*dot2 + (distance3**4)*g3[:,:,0]) * mask3
+        dy2 = (4*(distance3**3)*(-2*self.Y2)*dot2 + (distance3**4)*g3[:,:,1]) * mask3
+
+        dNx = (dx0 + dx1 + dx2) * self.amplitude
+        dNy = (dy0 + dy1 + dy2) * self.amplitude
+
+        dz_dXorig = dNx * (1 + dU_dx_vals) + dNy * dV_dx_vals
+        dz_dYorig = dNy * (1 + dV_dy_vals) + dNx * dU_dy_vals
+        dz_dXorig *= d_df_vals
+        dz_dYorig *= d_df_vals
+
+        c = cp.cos(self.rotation_radians)
+        s = cp.sin(self.rotation_radians)
+
+        dz_dx = self.frequency * (c * dz_dXorig + s * dz_dYorig)
+        dz_dy = self.frequency * (-s * dz_dXorig + c * dz_dYorig)
 
         if magnitude_switch:
-            magnitude = cp.sqrt(cp.square(dfNx) + cp.square(dfNy))
-            return magnitude
+            return cp.sqrt(dz_dx**2 + dz_dy**2)
 
-        return cp.stack([dfNx, dfNy], axis = -1)
+        return cp.stack([dz_dx, dz_dy], axis=-1)
     
     def noisy_Gradient_Calc(self):
 
@@ -261,16 +292,34 @@ class Simplex_Noise:
         g2 = self.grad_map(self.i + self.i1, self.j + self.j1)
         g3 = self.grad_map(self.i + 1, self.j + 1)
 
-        distance1 = cp.maximum(0, 0.5 - cp.square(self.X0) - cp.square(self.Y0))
-        distance2 = cp.maximum(0, 0.5 - cp.square(self.X1) - cp.square(self.Y1))
-        distance3 = cp.maximum(0, 0.5 - cp.square(self.X2) - cp.square(self.Y2))
+        distance1 = cp.maximum(0.5 - self.X0**2 - self.Y0**2, 0)
+        distance2 = cp.maximum(0.5 - self.X1**2 - self.Y1**2, 0)
+        distance3 = cp.maximum(0.5 - self.X2**2 - self.Y2**2, 0)
 
         dot0 = g1[:,:,0] * self.X0 + g1[:,:,1] * self.Y0
         dot1 = g2[:,:,0] * self.X1 + g2[:,:,1] * self.Y1
         dot2 = g3[:,:,0] * self.X2 + g3[:,:,1] * self.Y2
 
         d_df = sp.diff(self.function, self.x)
+
+        dU_dx = sp.diff(self.warp_x, self.x)
+        dU_dy = sp.diff(self.warp_x, self.y)
+        dV_dx = sp.diff(self.warp_y, self.x)
+        dV_dy = sp.diff(self.warp_y, self.y)
+
         d_df_func = sp.lambdify(self.x, d_df, 'cupy')
+
+        dU_dx_func = sp.lambdify((self.x, self.y), dU_dx, 'cupy')
+        dU_dy_func = sp.lambdify((self.x, self.y), dU_dy, 'cupy')
+        dV_dx_func = sp.lambdify((self.x, self.y), dV_dx, 'cupy')
+        dV_dy_func = sp.lambdify((self.x, self.y), dV_dy, 'cupy')
+
+        d_df_vals = d_df_func( self.unbiased_noisemap)
+
+        dU_dx_vals = dU_dx_func(self.X_orig, self.Y_orig) 
+        dU_dy_vals = dU_dy_func(self.X_orig, self.Y_orig)
+        dV_dx_vals = dV_dx_func(self.X_orig, self.Y_orig)
+        dV_dy_vals = dV_dy_func(self.X_orig, self.Y_orig)
 
         dx0 = 4*(distance1**3)*(-2*self.X0)*dot0 + (distance1**4)*g1[:,:,0]
         dy0 = 4*(distance1**3)*(-2*self.Y0)*dot0 + (distance1**4)*g1[:,:,1]
@@ -281,33 +330,31 @@ class Simplex_Noise:
         dx2 = 4*(distance3**3)*(-2*self.X2)*dot2 + (distance3**4)*g3[:,:,0]
         dy2 = 4*(distance3**3)*(-2*self.Y2)*dot2 + (distance3**4)*g3[:,:,1]
 
-        dNx = dx0 + dx1 + dx2
-        dNy = dy0 + dy1 + dy2
+        dNx = (dx0 + dx1 + dx2) * self.amplitude
+        dNy = (dy0 + dy1 + dy2) * self.amplitude
+        dNx *= d_df_vals
+        dNy *= d_df_vals
 
-        Wu = self.Wu
-        Wv = self.Wv
-        Wu_gradient = Wu.get_GradientMap()
-        Wv_gradient = Wv.get_GradientMap()
-        Wu_dx = Wu_gradient[:,:,0] + 1
+        dz_dXorig = dNx * (1 + dU_dx_vals) + dNy * dV_dx_vals
+        dz_dYorig = dNy * (1 + dV_dy_vals) + dNx * dU_dy_vals
+
+        c = cp.cos(self.rotation_radians)
+        s = cp.sin(self.rotation_radians)
+
+        dz_dx = self.frequency * (c * dz_dXorig + s * dz_dYorig)
+        dz_dy = self.frequency * (-s * dz_dXorig + c * dz_dYorig)
+
+        Wu_gradient = self.Wu.get_GradientMap()
+        Wv_gradient = self.Wv.get_GradientMap()
+        Wu_dx = Wu_gradient[:,:,0]
         Wu_dy = Wu_gradient[:,:,1]
         Wv_dx = Wv_gradient[:,:,0]
-        Wv_dy = Wv_gradient[:,:,1] + 1
+        Wv_dy = Wv_gradient[:,:,1]
 
-        dNx_dWx = dNx * Wu_dx + dNy * Wv_dx
-        dNy_dWy = dNy * Wv_dy + dNx * Wu_dy
+        dz_dx += dNx * Wu_dx + dNy * Wv_dx
+        dz_dy += dNx * Wu_dy + dNy * Wv_dy
 
-        dfNx = dNx_dWx * d_df_func(self.unbiased_noisemap) * self.amplitude
-        dfNy = dNy_dWy * d_df_func(self.unbiased_noisemap) * self.amplitude
-
-        return cp.stack([dfNx, dfNy], axis = -1)
-    
-    def neutons_method_diff(self):
-        nmp = self.get_NoiseMap()
-        # Squeeze to 2D so gradient only returns [dy, dx]
-        # Then stack them so the return value is a single CuPy array
-        gmp = cp.gradient(nmp)
-        #print("nmdiff shape: ", gmp.shape)
-        return cp.stack([gmp[0], gmp[1]], axis= -1)
+        return cp.stack([dz_dx, dz_dy], axis = -1)
 
     def normal_Vector_Map(self):
         gradientMap = self.get_GradientMap()
@@ -319,16 +366,65 @@ class Simplex_Noise:
         normal_vector = normal_vector / cp.linalg.norm(normal_vector, axis=-1, keepdims=True)
         self.normalmap = normal_vector
 
-    def normal_debugger(self):
-        nmp = self.get_NormalMap()
-        ret = cp.where(nmp[:,:,0] > 0, cp.where(nmp[:,:,1] > 0, 1, 0.66), cp.where(nmp[:,:,1] > 0, 0.33, 0))
-        return ret
-    
-    def gradient_debugger(self):
-        Gmp = self.get_GradientMap()
-        ret = cp.where(Gmp[:,:,0] > 0, cp.where(Gmp[:,:,1] > 0, 1, 0.66), cp.where(Gmp[:,:,1] > 0, 0.33, 0))
-        return ret
+    def fourier_multiplier(self, FM):
+        FMfunc = sp.lambdify(self.x, FM, 'cupy')
 
+        nmap = self.get_NoiseMap()
+        gmap = self.get_GradientMap()
+        sizex, sizey = self.noisemap.shape
+        wy = cp.hanning(sizey)
+        wx = cp.hanning(sizex)
+        window = cp.outer(wy, wx)
+        # self.noisemap *= window
+
+        zx = cp.fft.fftfreq(sizex)
+        zy = cp.fft.fftfreq(sizey)
+        zx, zy = cp.meshgrid(zx, zy, indexing='ij')
+        z = cp.sqrt(zx**2 + zy**2)
+        z = cp.where(z == 0, 1e-6, z)
+
+        mod_nmap = FMfunc(z) * cp.fft.fft2(self.noisemap)
+        self.noisemap = cp.fft.ifft2(mod_nmap).real
+
+
+        grad_x = cp.fft.ifft2(1j * 2 * cp.pi * zx * mod_nmap).real
+        grad_y = cp.fft.ifft2(1j * 2 * cp.pi * zy * mod_nmap).real
+
+        self.gradientmap = cp.stack([grad_x, grad_y], axis= -1)
+
+    def iterative_PDO(self, fourier_func, R_func, iterations):
+        Rfunc = sp.lambdify((self.x, self.y), R_func, 'cupy')
+        for i in range(iterations):
+            sx, sy = self.noisemap.shape
+            cx = cp.linspace(self.start_x, self.stop_x, sx)
+            cy = cp.linspace(self.start_y, self.stop_y, sy)
+            X, Y = cp.meshgrid(cx, cy)
+
+            self.noisemap *= Rfunc(X, Y)
+            self.fourier_multiplier(fourier_func)
+
+    def clipper(self, ratio):
+        sizex, sizey = self.noisemap.shape
+
+        keep_ratio = ratio
+        new_sx = int(sizex * keep_ratio)
+        new_sy = int(sizey * keep_ratio)
+
+        self.start_y = (sizex - new_sx) // 2
+        self.stop_y = self.start_y + new_sx
+        self.start_x = (sizey - new_sy) // 2
+        self.stop_x = self.start_x + new_sy
+
+        self.noisemap = self.noisemap[
+            self.start_y:self.stop_y,
+            self.start_x:self.stop_x
+        ]
+
+        self.gradientmap = self.gradientmap[
+            self.start_y:self.stop_y,
+            self.start_x:self.stop_x
+        ]
+    
     def fBm(self, octaves=4, lacunarity=2, persistence=0.5, octave_amplitude_array = None, fBm_bias_function=None):      # Fractional Brownian Motion for multiple octaves
         """
             :param octaves: HEAVILY IMPACTS PERFORMANCE - The number of smaller noise sublayers of the function. \n
@@ -352,8 +448,123 @@ class Simplex_Noise:
             S_warp_ampl = self.warp_noise_amp * (persistence ** n) * octave_amplitude_array[n - 1]
             S = Simplex_Noise(S_freq, S_ampl, self.start_x, self.stop_x, self.start_y, self.stop_y, self.res, self.seed + n, self.warp_x, self.warp_y, warp_noise_amplitude=S_warp_ampl, warp_noise_freq=S_warp_freq, warp_noise_seed=self.warp_noise_seed, 
                     warp_noise_octaves=self.warp_noise_octaves, function=fBm_bias_function, rotation_radians=self.rotation_radians + 2.7)
-            self.__add__(S,gradient_add_toggle=True)
-        return self    
+            self.__add__(S)
+        return self  
+
+    def gaussian_noisemap(self, mean, variance, seed=0):
+        """ kx = np.fft.fftfreq(n)
+        ky = np.fft.fftfreq(n)
+        kx, ky = np.meshgrid(kx, ky)
+        k = np.sqrt(kx**2 + ky**2)
+        k[0, 0] = 1.0  # avoid division by zero """
+
+        cp.seed = seed
+        sizex, sizey = self.noisemap.shape
+        gaussian_noise = cp.random.normal(mean, variance, size=(sizex, sizey)) # + 1j * np.random.normal(size=(sizex, sizey))  # Generates complex Gaussian noise
+
+        """ fBm_map = np.fft.fft2(gaussian_noise)
+
+        freq_spectrum = fBm_map * (k ** -(H + 1))
+        freq_spectrum[0, 0] = 0.0  # zero out frequency 0 component
+
+        fBm_map = np.fft.ifft2(freq_spectrum).real
+
+        fBm_map = (1 / np.max(fBm_map)) * fBm_map # Normalize the maximum value in the fbm_map to 1 """
+
+        return gaussian_noise
+    
+    def fake_fBm(self, H, mean, variance, seed=0):
+        nmap = self.get_NoiseMap()
+        sizex, sizey = nmap.shape
+        kx = cp.fft.fftfreq(sizex)
+        ky = cp.fft.fftfreq(sizey)
+        kx, ky = cp.meshgrid(kx, ky)
+        k = cp.sqrt(kx**2 + ky**2)
+        k[0, 0] = 1.0  # avoid division by zero
+
+        nmap = cp.fft.ifft2(cp.fft.fft2(nmap) * (k ** (H + 1)))
+
+        nmap += self.gaussian_noisemap(mean, variance, seed)
+
+        fBm_map = cp.fft.fft2(nmap)
+
+        freq_spectrum = fBm_map *(k ** -(H + 1))
+        freq_spectrum[0, 0] = 0.0  # zero out frequency 0 component
+        freq_gradient_x = freq_spectrum * (1j * kx)
+        freq_gradient_y = freq_spectrum * (1j * ky)
+
+
+        fBm_map = cp.fft.ifft2(freq_spectrum).real
+        fbm_gradient_x = cp.fft.ifft2(freq_gradient_x).real
+        fbm_gradient_y = cp.fft.ifft2(freq_gradient_y).real
+
+        self.noisemap = fBm_map
+        self.gradientmap = cp.stack([fbm_gradient_x, fbm_gradient_y], axis=-1)
+
+    def add_fBm(self, H, mean, variance, seed=0):
+        nmap = self.get_NoiseMap()
+        self.get_GradientMap()
+        sizex, sizey = nmap.shape
+
+        kx = cp.fft.fftfreq(sizex)
+        ky = cp.fft.fftfreq(sizey)
+        kx, ky = cp.meshgrid(kx, ky)
+        k = cp.sqrt(kx**2 + ky**2)
+        k[0, 0] = 1.0  # avoid division by zero
+
+        #nmap = cp.fft.ifft2(cp.fft.fft2(nmap) * (k ** (H + 1)))
+
+        fBm_map = cp.fft.fft2(self.gaussian_noisemap(mean, variance, seed))
+
+        freq_spectrum = fBm_map * (k ** -(H + 1))
+        freq_spectrum[0, 0] = 0.0  # zero out frequency 0 component
+
+
+        fBm_map = cp.fft.ifft2(freq_spectrum).real
+
+        self.noisemap += fBm_map # (fBm_map * cp.max(self.noisemap)) / cp.max(fBm_map)
+
+        freq_spectrum = cp.fft.fft2(self.noisemap)
+        freq_gradient_x = freq_spectrum * (1j * kx)
+        freq_gradient_y = freq_spectrum * (1j * ky)
+        fbm_gradient_x = cp.fft.ifft2(freq_gradient_x).real
+        fbm_gradient_y = cp.fft.ifft2(freq_gradient_y).real
+        self.gradientmap = cp.stack([fbm_gradient_x, fbm_gradient_y], axis=-1)
+
+    def finite_difference_Gradient_Calc(self):
+        noise = self.get_NoiseMap()
+
+        rows, cols = noise.shape
+
+        if rows < 2 or cols < 2:
+            raise ValueError("Noise map must have at least 2 rows and 2 columns.")
+
+        # Use the original coordinate arrays to obtain physical grid spacing.
+        # This remains valid even if clipper() has cropped the noise map.
+        dx = self.c_x[1] - self.c_x[0]
+        dy = self.c_y[1] - self.c_y[0]
+
+        gx = cp.empty_like(noise)
+        gy = cp.empty_like(noise)
+
+        # X derivatives: columns
+        gx[:, 1:-1] = (noise[:, 2:] - noise[:, :-2]) / (2 * dx)
+        gx[:, 0] = (noise[:, 1] - noise[:, 0]) / dx
+        gx[:, -1] = (noise[:, -1] - noise[:, -2]) / dx
+
+        # Y derivatives: rows
+        gy[1:-1, :] = (noise[2:, :] - noise[:-2, :]) / (2 * dy)
+        gy[0, :] = (noise[1, :] - noise[0, :]) / dy
+        gy[-1, :] = (noise[-1, :] - noise[-2, :]) / dy
+
+        # Store the result in the same format as your analytical gradient maps.
+        self.gradientmap = cp.stack([gx, gy], axis=-1)
+
+        # The previous normal map is no longer valid.
+        self.normalmap = None
+
+        return self.gradientmap
+        
 
 def basic_fBm():
     """Prebuilt basic noise function"""
@@ -400,16 +611,13 @@ def shadow_map(heightmap, light_vector, step_size=1.0, max_steps=50, smoothness=
     """
     Compute soft shadows based on distance to first occlusion.
     
-    heightmap: (N,N) CuPy array \n
-    light_vector: (lx, ly, lz) \n
-    step_size: step along ray \n
-    max_steps: max steps along light ray \n
-    smoothness: controls softness of shadow edges, 0 to 1 \n
+    heightmap: (N,N) CuPy array
+    light_vector: (lx, ly, lz)
+    step_size: step along ray
+    max_steps: max steps along light ray
+    smoothness: controls softness of shadow edges, 0 to 1
     """
     lx, ly, lz = light_vector 
-    lx *= 1
-    ly *= 1
-    lz *= 1
     norm = cp.sqrt(lx**2 + ly**2 + lz**2)
     lx, ly, lz = lx / norm, ly / norm, lz / norm
 
@@ -448,7 +656,7 @@ def shadow_map(heightmap, light_vector, step_size=1.0, max_steps=50, smoothness=
 
 def Simple_Wrapper(seed, function, octaves, allow_light=True):
     res = 2             # Resolution. Heavily impacts performance
-    freq = 400
+    freq = 800
     start_x = -500      # Graph size
     stop_x = 500
     start_y = -500
@@ -460,32 +668,34 @@ def Simple_Wrapper(seed, function, octaves, allow_light=True):
 
     noise_func = Simplex_Noise(1 / freq, amplitude, start_x, stop_x, start_y, stop_y, resolution, seed, function=function, rotation_radians=1)
     noise_func.fBm(octaves, lacunarity=1.5, persistence=0.75, fBm_bias_function=function)
+    #noise_func.fake_fBm(0.1, 0, 1)
+
     noise_func.unlerp_noise(-1000, 1000)
 
     Nmp = noise_func.get_NoiseMap().get()
     Gmp = noise_func.gradient_Magnitude_Map().get()
 
     plt.imshow(Nmp, extent=(start_x, stop_x, start_y, stop_y), origin="lower", cmap="viridis")
-    plt.colorbar(label="f(x, y)")
-    plt.title("Example Function")
-    plt.title('Simple Wrapper Noise Map')
+    #plt.colorbar(label="f(x, y)")
+    #plt.title("Example Function")
+    plt.title(f'{octaves}-Octave Simplex Noise Map')
 
     if allow_light:
         lighting_vector = [1, 1, 1]
-        L = (shadow_map(noise_func.noisemap, lighting_vector, 1 / res, 100 * res, 0.5 / res)).get()
+        L = (shadow_map(noise_func.noisemap, lighting_vector, 1 / res, 100 * res, 0.5 / res) + lambertian_Lighting(noise_func, lighting_vector) / 5 + 0.2).get()
         L = (L - cp.min(L)) / (cp.max(L) - cp.min(L))
 
         plt.imshow(L, extent=(start_x, stop_x, start_y, stop_y), origin='lower',cmap='Greys_r', alpha=0.5)  # alpha controls transparency, making the gradient overlay visible but not overpowering
-        plt.colorbar(label='Light Map')
+        #plt.colorbar(label='Light Map')
         plt.title('Simple Wrapper Noise Map with Lighting')
 
+    #plt.savefig(f"Octave_frame{octaves}.png")
     plt.show()
 
 
-def Complex_Wrapper (frequency, seed, function, octaves, fBm_bias_func, lacunarity=1.5, persistence=0.75, warp_func_x=None, warp_func_y=None, 
+def Complex_Wrapper (seed, frequency, function, octaves, fBm_bias_func, FM = 1, lacunarity=1.5, persistence=0.75, warp_func_x=None, warp_func_y=None, 
                     warp_noise_amplitude=0, warp_noise_freq=0.01, warp_noise_seed=0, warp_noise_octaves=0, rotation_radians=0, unlerp_strength=1000, light_vector = [1, 1, 1]):
     """
-    :param frequency: The scale of the noise. \n
     :param seed: The seed of the random number generator used to assign vectors to simplex points (internal). \n
     :param function: Bias function for the final noise graph. Allows one to make various kinds of noise, like Ridged or Billowed noise. Works with differentiable functions in terms of x. \n
     :param octaves: HEAVILY IMPACTS PERFORMANCE - The number of smaller noise sublayers of the function. \n
@@ -503,7 +713,7 @@ def Complex_Wrapper (frequency, seed, function, octaves, fBm_bias_func, lacunari
     :param light_vector: The source of the light. The vector "points to where the sun is." Works with negative z values too.
     """
     
-    res = 1             # Resolution. Heavily impacts performance
+    res = 2             # Resolution. Heavily impacts performance
     freq = frequency
     start_x = -500      # Graph size
     stop_x = 500
@@ -517,6 +727,60 @@ def Complex_Wrapper (frequency, seed, function, octaves, fBm_bias_func, lacunari
     noise_func = Simplex_Noise(1 / freq, amplitude, start_x, stop_x, start_y, stop_y, resolution, seed, warp_func_x, warp_func_y, 
                                 warp_noise_amplitude, warp_noise_freq, warp_noise_seed, warp_noise_octaves, function, rotation_radians)
     noise_func.fBm(octaves, lacunarity, persistence, fBm_bias_function=fBm_bias_func)
+    
+    noise_func.unlerp_noise(-unlerp_strength, unlerp_strength)
+
+    Nmp = noise_func.get_NoiseMap().get()
+    Gmp = noise_func.gradient_Magnitude_Map().get() # noise_func.gradient_Magnitude_Map().get() # noise_func.find_magnitudes(noise_func.finite_difference_Gradient_Calc()).get()
+    plt.imshow(Nmp, extent=(start_x, stop_x, start_y, stop_y), origin="lower", cmap="viridis")
+    plt.title(f'Complex Wrapper Noise Map')
+
+    if light_vector != [0, 0, 0]:
+        L = (shadow_map(noise_func.noisemap, light_vector, 1 / res, 100 * res, 0.5 / res) + lambertian_Lighting(noise_func, light_vector) / 5 + 0.2).get()
+        L = (L - cp.min(L)) / (cp.max(L) - cp.min(L))
+
+        plt.imshow(L, extent=(start_x, stop_x, start_y, stop_y), origin='lower',cmap='Greys_r', alpha=0.5)  # alpha controls transparency, making the gradient overlay visible but not overpowering
+        plt.title(f'Complex Wrapper Noise Map with Lighting')
+
+    #plt.savefig(f"fBm_frame{(int) (octaves)}.png")
+    plt.show()
+
+def Complexer_Wrapper (seed, frequency, function, octaves, fBm_bias_func, FM = 1, R_func = 1, iterations=1, lacunarity=1.5, persistence=0.75, warp_func_x=None, warp_func_y=None, 
+                    warp_noise_amplitude=0, warp_noise_freq=0.01, warp_noise_seed=0, warp_noise_octaves=0, rotation_radians=0, unlerp_strength=1000, light_vector = [1, 1, 1]):
+    """
+    :param seed: The seed of the random number generator used to assign vectors to simplex points (internal). \n
+    :param function: Bias function for the final noise graph. Allows one to make various kinds of noise, like Ridged or Billowed noise. Works with differentiable functions in terms of x. \n
+    :param octaves: HEAVILY IMPACTS PERFORMANCE - The number of smaller noise sublayers of the function. \n
+    :param fBm_bias_func: Allows the bias function to be different than the initial bias function (the function parameter). \n
+    :param lacunarity: Multiplicative increase in frequency over octave layers. \n
+    :param persistence: Multiplicative decrease in amplitude over octave layers. \n
+    :param warp_func_x: A sympy function that warps each x value by an amount dictated by the function, which can take in both x and y positions. \n
+    :param warp_func_y: A sympy function that warps each y value by an amount dictated by the function, which can take in both x and y positions. \n
+    :param warp_noise_amplitude: Determines the amplitude of an additional noise function that causes x and y warping. \n
+    :param warp_noise_freq: Determines frequency of an additional noise function that causes x and y warping. \n
+    :param warp_noise_seed: Determines seed of an additional noise function that causes x and y warping. \n
+    :param warp_noise_octaves: HEAVILY IMPACTS PERFORMANCE - Determines octave count of an additional noise function that causes x and y warping. \n
+    :param rotation_radians: Rotates the whole function by this many radians.
+    :param unlerp_strength: The range the noise function will adhere to. This will affect the lighting engine.
+    :param light_vector: The source of the light. The vector "points to where the sun is." Works with negative z values too.
+    """
+    
+    res = 2             # Resolution. Heavily impacts performance
+    freq = frequency
+    start_x = -500      # Graph size
+    stop_x = 500
+    start_y = -500
+    stop_y = 500
+    amplitude = 100
+
+    area = (stop_x - start_x) * (stop_y - start_y)
+    resolution = int(area ** 0.5) * int(res)
+
+    noise_func = Simplex_Noise(1 / freq, amplitude, start_x, stop_x, start_y, stop_y, resolution, seed, warp_func_x, warp_func_y, 
+                                warp_noise_amplitude, warp_noise_freq, warp_noise_seed, warp_noise_octaves, function, rotation_radians)
+    noise_func.fBm(octaves, lacunarity, persistence, fBm_bias_function=fBm_bias_func)
+    noise_func.iterative_PDO(FM, R_func, iterations)
+    noise_func.clipper(0.7)
     noise_func.unlerp_noise(-unlerp_strength, unlerp_strength)
 
     Nmp = noise_func.get_NoiseMap().get()
@@ -527,31 +791,58 @@ def Complex_Wrapper (frequency, seed, function, octaves, fBm_bias_func, lacunari
     plt.title('Complex Wrapper Noise Map')
 
     if light_vector != [0, 0, 0]:
-        #L = (shadow_map(noise_func.noisemap, light_vector, 1 / res, 100 * res, 0.5 / res) + lambertian_Lighting(noise_func, light_vector) / 5 + 0.2).get()
-        L = (lambertian_Lighting(noise_func, light_vector)).get()
-        #L = (shadow_map(noise_func.noisemap, light_vector, 1 / res, 100 * res, 0.5 / res)).get()
+        L = (shadow_map(noise_func.noisemap, light_vector, 1 / res, 100 * res, 0.5 / res) + lambertian_Lighting(noise_func, light_vector) / 5 + 0.2).get()
         L = (L - cp.min(L)) / (cp.max(L) - cp.min(L))
-        #ndb = noise_func.normal_debugger().get()
-        #gdb = noise_func.gradient_debugger().get()
+
         plt.imshow(L, extent=(start_x, stop_x, start_y, stop_y), origin='lower',cmap='Greys_r', alpha=0.5)  # alpha controls transparency, making the gradient overlay visible but not overpowering
         plt.colorbar(label='Light Map')
-        plt.title('Complex Wrapper Noise Map with Lighting')
+        plt.title('Noise-Warped Map with Lighting')
 
-        arrow_scale = 50  # Adjust size of arrow
-        stx = start_x + (stop_x - start_x) / 30
-        sty = start_y + (stop_y - start_y) / 30
+    plt.show()
 
-        plt.arrow(stx + 100, sty + 100, light_vector[0] * arrow_scale, light_vector[1] * arrow_scale, 
-            head_width=20, head_length=15, fc='white', ec='white', linewidth=2)
+def fake_fBm_wrapper(seed, function, Hurst, variance, octaves=0, allow_light=True):
+    res = 2             # Resolution. Heavily impacts performance
+    freq = 800
+    start_x = -500      # Graph size
+    stop_x = 500
+    start_y = -500
+    stop_y = 500
+    amplitude = 100
 
+    area = (stop_x - start_x) * (stop_y - start_y)
+    resolution = int(area ** 0.5) * int(res)
+
+    noise_func = Simplex_Noise(1 / freq, amplitude, start_x, stop_x, start_y, stop_y, resolution, seed, function=function, rotation_radians=1)
+    noise_func.fBm(octaves, lacunarity=1.5, persistence=0.75, fBm_bias_function=function)
+    noise_func.fake_fBm(Hurst, 0, sp.sqrt(variance), seed)
+
+    noise_func.unlerp_noise(-1000, 1000)
+
+    Nmp = noise_func.test_GradientMap().get()
+    Gmp = noise_func.gradient_Magnitude_Map().get()
+
+    plt.imshow(Nmp, extent=(start_x, stop_x, start_y, stop_y), origin="lower", cmap="viridis")
+    #plt.colorbar(label="f(x, y)")
+    plt.title(f'fBm (Hurst = {Hurst:.2f}) Simplex Noise Map')
+
+    if allow_light:
+        lighting_vector = [1, 1, 1]
+        L = (shadow_map(noise_func.noisemap, lighting_vector, 1 / res, 100 * res, 0.5 / res) + lambertian_Lighting(noise_func, lighting_vector) / 5 + 0.2).get()
+        L = (L - cp.min(L)) / (cp.max(L) - cp.min(L))
+
+        plt.imshow(L, extent=(start_x, stop_x, start_y, stop_y), origin='lower',cmap='Greys_r', alpha=0.5)  # alpha controls transparency, making the gradient overlay visible but not overpowering
+        #plt.colorbar(label='Light Map')
+        plt.title('Simple Wrapper Noise Map with Lighting')
+
+    #plt.savefig(f"fBm-frame{(int) (Hurst * 20)}.png")
     plt.show()
 
 
 if __name__ == "__main__":
 
-    seed = 1004                       # The RNG seed for noise generation
-    octaves = 5                   # The number of sublayers called in the noise function
-    bias_function = 1 / sp.sqrt(x ** 2 + 0.0001)             # Can be any Sympy compatible differentiable function in terms of x
+    seed = 1036                      # The RNG seed for noise generation
+    octaves = 15                   # The number of sublayers called in the noise function
+    bias_function = sp.sin(x**3 - 5 * x**2 + x) # sp.sin(x**3 - 5 * x**2 + x)           # Can be any Sympy compatible differentiable function in terms of x
                                     # Billowed noise: sp.sqrt(x**2 + 0.000001)
                                     # Ridged noise: sp.sqrt(x**2 + 0.000001) * -1
                                     # Something cool: sp.sin(x**3 - 5 * x**2 + x)
@@ -559,19 +850,25 @@ if __name__ == "__main__":
 
     """<<--------------------------------------------------->>"""
 
+    H = 0.1
+    variance = 40**2
+
     # Extra values for the more complicated wrapper. Explanation found in wrapper documentation. To disable lighting engine, set light vector to [0, 0, 0].
 
-    frequency = 500
+    frequency = 800
 
-    fBm_bias_func = 1 / sp.sqrt(x ** 2 + 0.0001)
+    fBm_bias_func = sp.sin(x**3 - 5 * x**2 + x)  #sp.sqrt(x**2 + 0.000001)
+    FM = sp.I * sp.E ** x   #(sp.sqrt(5) + sp.sqrt(5) * sp.I) / (5 * sp.I) #sp.sin(x) - (sp.cos(2*x))
+    R_func = ((x + y)**2 - 10)   # (sp.sin((x+1)**2 + (y+1)**2) * sp.I) ** 4
+    iterations = 5
     lacunarity = 1.5
     persistence = 0.75
-    warp_func_x = x
-    warp_func_y = y
+    warp_func_x = sp.sin(x + 2 * y) #sp.sin(x + 2 * y)            #sp.sin(x + 2 * y)
+    warp_func_y = sp.cos(y + 2*x) #sp.cos(y + 2*x)            #sp.sqrt(y**2 + 0.00001) * -1
     warp_noise_amplitude = 0
-    warp_noise_frequency = 10000
+    warp_noise_frequency = 10
     warp_noise_seed = 50
-    warp_noise_octaves = 3
+    warp_noise_octaves = 1
     rotation_radians = 0
     noise_function_range = 1000             # -val to val
     light_vector = [1, 1, 1]             # When z is large relative to x and y, very few shadows are cast, meaning all pixels have a similar light level. 
@@ -579,10 +876,18 @@ if __name__ == "__main__":
 
 
 simple = False       # Toggles simple wrapper vs complex wrapper, so they don't need to be separately commented out everytime you want to switch.
+fake_fBm = False
 
-
-if simple == True:
+if fake_fBm == True:
+    fake_fBm_wrapper(seed, bias_function, H, variance, octaves, True)
+    #fake_fBm_wrapper(seed, bias_function, H, variance, octaves, False)
+elif simple == True:
     Simple_Wrapper(seed, bias_function, octaves, lighting)
 else:
-    Complex_Wrapper(frequency, seed, bias_function, octaves, fBm_bias_func, lacunarity, persistence, warp_func_x, warp_func_y, warp_noise_amplitude, warp_noise_frequency, 
-                    warp_noise_seed, warp_noise_octaves, rotation_radians, noise_function_range, light_vector)
+    Complex_Wrapper(seed, frequency, bias_function, octaves, fBm_bias_func, FM, lacunarity, persistence, warp_func_x, warp_func_y, 
+                    warp_noise_amplitude, warp_noise_frequency, warp_noise_seed, warp_noise_octaves, rotation_radians, noise_function_range, light_vector)
+    #Complexer_Wrapper(seed, frequency, bias_function, octaves, fBm_bias_func, FM, lacunarity, persistence, warp_func_x, warp_func_y, warp_noise_amplitude, warp_noise_frequency, 
+    #            warp_noise_seed, warp_noise_octaves, rotation_radians, noise_function_range, light_vector)
+    
+    #Complexer_Wrapper(seed, frequency, bias_function, octaves, fBm_bias_func, FM, R_func, iterations, lacunarity, persistence, warp_func_x, warp_func_y)
+
